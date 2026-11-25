@@ -5,9 +5,10 @@ name: Go
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "master", "qualification/report-accounting" ]
   pull_request:
     branches: [ "master" ]
+  workflow_dispatch:
 
 jobs:
 
@@ -15,14 +16,51 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
         go-version: '1.21'
 
+    - name: Check aggregate report accounting
+      run: |
+        set -euo pipefail
+        output="$RUNNER_TEMP/hey-report-validation"
+        mkdir -p "$output"
+        go version | tee "$output/go-version.txt"
+        go env GOTOOLCHAIN GOVERSION >> "$output/go-version.txt"
+        gofmt -w requester/report.go requester/requester_test.go
+        git diff --binary -- requester/report.go requester/requester_test.go > "$output/format.patch"
+        cp requester/report.go requester/requester_test.go "$output/"
+        sha256sum requester/report.go requester/requester_test.go > "$output/source.sha256"
+        cp requester/report.go "$RUNNER_TEMP/candidate-report.go"
+        trap 'cp "$RUNNER_TEMP/candidate-report.go" requester/report.go' EXIT
+        git show 5626f79b8698df6daf9b25799c9805c6acc96740:requester/report.go > requester/report.go
+        if go test ./requester -run '^TestReportBeyondSampleLimit$' -count=1 > "$output/baseline.log" 2>&1; then
+          cat "$output/baseline.log"
+          echo 'Unchanged producer unexpectedly passed the boundary regression'
+          exit 1
+        fi
+        cat "$output/baseline.log"
+        grep -F -- '--- FAIL: TestReportBeyondSampleLimit' "$output/baseline.log"
+        grep -F 'status distribution =' "$output/baseline.log"
+        grep -F 'normalized total average =' "$output/baseline.log"
+        cp "$RUNNER_TEMP/candidate-report.go" requester/report.go
+        trap - EXIT
+        go test ./requester -run '^TestReportBeyondSampleLimit$' -count=1 -v | tee "$output/candidate.log"
+        go test -race ./requester -count=1 -v | tee "$output/race.log"
+
     - name: Build
       run: go build -v ./...
 
     - name: Test
       run: go test -v ./...
+
+    - name: Retain report validation output
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: hey-report-validation
+        path: ${{ runner.temp }}/hey-report-validation/

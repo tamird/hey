@@ -54,13 +54,13 @@ type report struct {
 	done    chan bool
 	total   time.Duration
 
-	errorDist map[string]int
+	errorDist      map[string]int
 	statusCodeDist map[int]int
-	numSuccess int64
-	lats      []float64
-	sizeTotal int64
-	numRes    int64
-	output    string
+	numSuccess     int64
+	lats           []float64
+	sizeTotal      int64
+	numRes         int64
+	output         string
 
 	w io.Writer
 }
@@ -68,23 +68,23 @@ type report struct {
 func newReport(w io.Writer, results chan *result, output string, n int) *report {
 	cap := min(n, maxRes)
 	return &report{
-		output:      output,
-		results:     results,
-		done:        make(chan bool, 1),
-		errorDist:   make(map[string]int),
+		output:         output,
+		results:        results,
+		done:           make(chan bool, 1),
+		errorDist:      make(map[string]int),
 		statusCodeDist: make(map[int]int),
-		w:           w,
-		connLats:    make([]float64, 0, cap),
-		dnsLats:     make([]float64, 0, cap),
-		reqLats:     make([]float64, 0, cap),
-		resLats:     make([]float64, 0, cap),
-		delayLats:   make([]float64, 0, cap),
-		lats:        make([]float64, 0, cap),
-		statusCodes: make([]int, 0, cap),
+		w:              w,
+		connLats:       make([]float64, 0, cap),
+		dnsLats:        make([]float64, 0, cap),
+		reqLats:        make([]float64, 0, cap),
+		resLats:        make([]float64, 0, cap),
+		delayLats:      make([]float64, 0, cap),
+		lats:           make([]float64, 0, cap),
+		statusCodes:    make([]int, 0, cap),
 	}
 }
 
-func runReporter(r *report) {
+func runReporter(r *report, sampleLimit int) {
 	// Loop will continue until channel is closed
 	for res := range r.results {
 		r.numRes++
@@ -99,7 +99,7 @@ func runReporter(r *report) {
 			r.avgDNS += res.dnsDuration.Seconds()
 			r.avgReq += res.reqDuration.Seconds()
 			r.avgRes += res.resDuration.Seconds()
-			if len(r.resLats) < maxRes {
+			if len(r.resLats) < sampleLimit {
 				r.lats = append(r.lats, res.duration.Seconds())
 				r.connLats = append(r.connLats, res.connDuration.Seconds())
 				r.dnsLats = append(r.dnsLats, res.dnsDuration.Seconds())
@@ -147,32 +147,33 @@ func (r *report) printf(s string, v ...interface{}) {
 
 func (r *report) snapshot() Report {
 	snapshot := Report{
-		AvgTotal:    r.avgTotal,
-		Average:     r.average,
-		Rps:         r.rps,
-		SizeTotal:   r.sizeTotal,
-		AvgConn:     r.avgConn,
-		AvgDNS:      r.avgDNS,
-		AvgReq:      r.avgReq,
-		AvgRes:      r.avgRes,
-		AvgDelay:    r.avgDelay,
-		Total:       r.total,
-		ErrorDist:   r.errorDist,
-		StatusCodeDist: r.statusCodeDist,
-		NumRes:      r.numRes,
-		Lats:        make([]float64, len(r.lats)),
-		ConnLats:    make([]float64, len(r.lats)),
-		DnsLats:     make([]float64, len(r.lats)),
-		ReqLats:     make([]float64, len(r.lats)),
-		ResLats:     make([]float64, len(r.lats)),
-		DelayLats:   make([]float64, len(r.lats)),
-		Offsets:     make([]float64, len(r.lats)),
-		StatusCodes: make([]int, len(r.lats)),
+		AvgTotal:       r.avgTotal,
+		Average:        r.average,
+		Rps:            r.rps,
+		SizeTotal:      r.sizeTotal,
+		AvgConn:        r.avgConn,
+		AvgDNS:         r.avgDNS,
+		AvgReq:         r.avgReq,
+		AvgRes:         r.avgRes,
+		AvgDelay:       r.avgDelay,
+		Total:          r.total,
+		ErrorDist:      r.errorDist,
+		NumRes:         r.numRes,
+		Lats:           make([]float64, len(r.lats)),
+		ConnLats:       make([]float64, len(r.lats)),
+		DnsLats:        make([]float64, len(r.lats)),
+		ReqLats:        make([]float64, len(r.lats)),
+		ResLats:        make([]float64, len(r.lats)),
+		DelayLats:      make([]float64, len(r.lats)),
+		Offsets:        make([]float64, len(r.lats)),
+		StatusCodes:    make([]int, len(r.lats)),
 	}
 
 	if len(r.lats) == 0 {
 		return snapshot
 	}
+
+	snapshot.StatusCodeDist = r.statusCodeDist
 
 	snapshot.SizeReq = r.sizeTotal / r.numSuccess
 
@@ -210,7 +211,6 @@ func (r *report) snapshot() Report {
 	snapshot.DelayMin = r.delayLats[len(r.delayLats)-1]
 	snapshot.ResMax = r.resLats[0]
 	snapshot.ResMin = r.resLats[len(r.resLats)-1]
-
 
 	return snapshot
 }

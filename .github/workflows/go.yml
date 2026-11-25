@@ -31,13 +31,25 @@ jobs:
         mkdir -p "$output"
         go version | tee "$output/go-version.txt"
         go env GOTOOLCHAIN GOVERSION >> "$output/go-version.txt"
-        gofmt -w requester/report.go requester/requester_test.go
-        git diff --binary -- requester/report.go requester/requester_test.go > "$output/format.patch"
-        cp requester/report.go requester/requester_test.go "$output/"
-        sha256sum requester/report.go requester/requester_test.go > "$output/source.sha256"
+        gofmt -w requester/report.go requester/requester.go requester/requester_test.go
+        git diff --binary -- requester/report.go requester/requester.go requester/requester_test.go > "$output/format.patch"
+        cp requester/report.go requester/requester.go requester/requester_test.go "$output/"
+        sha256sum requester/report.go requester/requester.go requester/requester_test.go > "$output/source.sha256"
         cp requester/report.go "$RUNNER_TEMP/candidate-report.go"
         trap 'cp "$RUNNER_TEMP/candidate-report.go" requester/report.go' EXIT
         git show 5626f79b8698df6daf9b25799c9805c6acc96740:requester/report.go > requester/report.go
+        # Add only the private test hook to the baseline; keep its accounting unchanged.
+        python3 - <<'PYBASE'
+        from pathlib import Path
+        p = Path("requester/report.go")
+        source = p.read_text()
+        assert source.count("func runReporter(r *report) {") == 1
+        source = source.replace("func runReporter(r *report) {", "func runReporter(r *report, sampleLimit int) {")
+        assert source.count("if len(r.resLats) < maxRes {") == 1
+        source = source.replace("if len(r.resLats) < maxRes {", "if len(r.resLats) < sampleLimit {")
+        p.write_text(source)
+        PYBASE
+        go test ./requester -run '^TestReportNoSuccessfulResults$' -count=1 -v | tee "$output/baseline-zero.log"
         if go test ./requester -run '^TestReportBeyondSampleLimit$' -count=1 > "$output/baseline.log" 2>&1; then
           cat "$output/baseline.log"
           echo 'Unchanged producer unexpectedly passed the boundary regression'
@@ -46,10 +58,10 @@ jobs:
         cat "$output/baseline.log"
         grep -F -- '--- FAIL: TestReportBeyondSampleLimit' "$output/baseline.log"
         grep -F 'status distribution =' "$output/baseline.log"
-        grep -F 'normalized total average =' "$output/baseline.log"
+        grep -F 'normalized average ' "$output/baseline.log"
         cp "$RUNNER_TEMP/candidate-report.go" requester/report.go
         trap - EXIT
-        go test ./requester -run '^TestReportBeyondSampleLimit$' -count=1 -v | tee "$output/candidate.log"
+        go test ./requester -run '^TestReport(BeyondSampleLimit|NoSuccessfulResults)$' -count=1 -v | tee "$output/candidate.log"
         go test -race ./requester -count=1 -v | tee "$output/race.log"
 
     - name: Build
